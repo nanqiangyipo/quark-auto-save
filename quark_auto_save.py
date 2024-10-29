@@ -13,8 +13,13 @@ import sys
 import json
 import time
 import random
+import logging
+from typing import List
+
 import requests
 from datetime import datetime
+
+import treelib
 
 # 兼容青龙
 try:
@@ -489,13 +494,114 @@ class Quark:
             return
         # print("stoken: ", stoken)
 
-        updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
+        updated_tree = self.norm_dir_check_and_save(task, pwd_id, stoken, pdir_fid)
+        # updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
+        #todo 更新消息norm_dir_check_and_save返回为None
         if updated_tree.size(1) > 0:
             add_notify(f"✅《{task['taskname']}》添加追更：\n{updated_tree}")
             return True
         else:
             print(f"任务结束：没有新的转存任务")
             return False
+    def norm_dir_check_and_save(self, task, pwd_id, stoken, pdir_fid="", subdir_path=""):
+        #分享源目录所有文件树
+        share_tree = Tree()
+        share_file_list = self.get_detail(pwd_id, stoken, pdir_fid)
+        if share_file_list:
+            share_tree.create_node('',share_file_list[0]['pdir_fid'])
+        while share_file_list:
+            share_file = share_file_list.pop(0)
+            share_tree.create_node(share_file['file_name'], share_file['fid'], parent=share_file['pdir_fid'],data=share_file)
+            if share_file['dir']:
+                sub_dir_files = self.get_detail(pwd_id, stoken, share_file['fid'])
+                share_file_list.extend(sub_dir_files)
+        node:treelib.Node = share_tree.get_node(share_tree.root)
+
+        # 获取目标目录文件列表
+        save_rootpath = re.sub(r"/{2,}", "/", f"/{task['savepath']}{subdir_path}")
+        # if not self.savepath_fid.get(save_rootpath):
+        #     if get_fids := self.get_fids([save_rootpath]):
+        #         self.savepath_fid[save_rootpath] = get_fids[0]["fid"]
+        #     else:
+        #         print(f"❌ 目录 {save_rootpath} fid获取失败，跳过转存")
+        #         # return tree
+        # to_pdir_fid = self.savepath_fid[save_rootpath]
+        # dir_file_list = self.ls_dir(to_pdir_fid)
+        # self.mkdir(save_rootpath)
+
+        #目标存储路径所有文件树
+        # 需保存的文件清单
+        max_file_nums=500
+        traval_width = [[share_tree.get_node(share_tree.root)]]
+        print(f"分析链接总共{share_tree.size()}个文件")
+        try:
+            while traval_width:
+                need_save_list:List[treelib.Node] = []
+                save_amounts = 0
+                # 按文件数量从少到多排序
+                node_count = [(node,share_tree.subtree(node.identifier).size()) for node in traval_width.pop()]
+                node_count.sort(key=lambda x: x[1])
+
+                # 这一层的父目录整个存到目标主目录下，没有就创建
+                if node_count[0][0].is_root():
+                    save_dir_path = save_rootpath
+                else:
+                    parent_node_id = share_tree.parent(node_count[0][0].identifier).identifier
+                    path2file = [share_tree.get_node(nid).tag for nid in share_tree.rsearch(parent_node_id)]
+                    path2file.reverse()
+                    #  --存放目录不存在就创建
+                    save_dir_path = save_rootpath+'/'.join(path2file)
+                if save_dir_path not in self.savepath_fid:
+                    mkdir_return = self.mkdir(save_dir_path)
+                    if mkdir_return["code"] == 0:
+                        new_dir = mkdir_return["data"]
+                        self.savepath_fid[save_dir_path] = new_dir['fid']
+                        print(f"创建文件夹：{save_dir_path}")
+                    else:
+                        continue
+                        print(f"创建文件夹：{save_dir_path} 失败, {mkdir_return['message']}")
+                to_pdir_fid = self.savepath_fid.get(save_dir_path)
+
+                for node,sub_dir_file_nums in node_count:
+                    if  sub_dir_file_nums >= max_file_nums:
+                        traval_width.append(share_tree.children(node.identifier))
+                    elif save_amounts+sub_dir_file_nums >= max_file_nums:
+                        print(f"a保存{save_amounts}个文件: {','.join([t.tag for t in need_save_list])}")
+                        # 保存文件
+                        fid_list = [item.data["fid"] for item in need_save_list]
+                        fid_token_list = [item.data["share_fid_token"] for item in need_save_list]
+                        # save_name_list = [item.data["file_name"] for item in need_save_list]
+                        # save_name_list = [item.data["save_name"] for item in need_save_list]
+
+                        save_file_return = self.save_file(
+                            fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken
+                        )
+                        # err_msg = None
+                        #
+                        save_amounts = sub_dir_file_nums
+                        need_save_list = [node]
+                    else:
+                        need_save_list.append(node)
+                        save_amounts += sub_dir_file_nums
+                if save_amounts>0:
+                    print(f"b保存{save_amounts}个文件: {','.join([t.tag for t in need_save_list])}")
+                    # 保存文件
+                    fid_list = [item.data["fid"] for item in need_save_list]
+                    fid_token_list = [item.data["share_fid_token"] for item in need_save_list]
+                    # save_name_list = [item.data["file_name"] for item in need_save_list]
+                    # save_name_list = [item.data["save_name"] for item in need_save_list]
+
+                    save_file_return = self.save_file(
+                        fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken
+                    )
+                    # err_msg = None
+        except Exception as e:
+            logging.exception(e)
+            print(e)
+
+
+        pass
+
 
     def dir_check_and_save(self, task, pwd_id, stoken, pdir_fid="", subdir_path=""):
         tree = Tree()
