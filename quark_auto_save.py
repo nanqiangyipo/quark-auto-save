@@ -692,7 +692,7 @@ class Quark:
             # 指定文件开始订阅/到达指定文件（含）结束历遍
             if share_file["fid"] == task.get("startfid", ""):
                 break
-
+        #todo 添加文件数量大于免费额度限制后分别存储的功能
         fid_list = [item["fid"] for item in need_save_list]
         fid_token_list = [item["share_fid_token"] for item in need_save_list]
         save_name_list = [item["save_name"] for item in need_save_list]
